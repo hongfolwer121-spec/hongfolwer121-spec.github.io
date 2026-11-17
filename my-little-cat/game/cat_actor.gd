@@ -15,6 +15,11 @@ const FRONT_POS := Vector3(0.35, 0, 1.55)   # close to the camera: "comes to you
 const BOUNDS_MIN := Vector3(-2.4, 0, -2.4)
 const BOUNDS_MAX := Vector3(2.4, 0, 1.7)
 const PET_WINDOW_MS := 20000
+const CUSHION_POS := Vector3(-1.25, 0, 0.55)
+const SCRATCHER_POS := Vector3(-1.9, 0, -2.2)
+const TOWER_POS := Vector3(1.45, 0, -2.2)
+const TOWER_TOP := 1.1
+const BOX_POSITIONS := [Vector3(1.45, 0, 0.9), Vector3(-0.7, 0, -1.9)]
 
 var data: CatData
 var household: Household
@@ -78,6 +83,12 @@ func signal_text() -> String:
 			return "다른 고양이만 예뻐해서 질투가 났어요"
 		"approach":
 			return "당신에게 다가왔어요"
+		"box":
+			return "택배 상자 안에 쏙 들어가 있어요"
+		"scratch":
+			return "스크래처에 발톱을 갈고 있어요"
+		"perch":
+			return "캣타워 꼭대기에서 방을 내려다보고 있어요"
 	return "편하게 쉬고 있어요"
 
 
@@ -172,9 +183,25 @@ func _decide() -> void:
 		habit_shown.emit(data.id, "night_zoomies")
 		_emit_behavior("zoomies")
 		return
+	var owned: Array = household.owned if household else []
+	var boxes: int = household.boxes if household else 0
+	if boxes > 0 and rng.randf() < (0.35 if "curious" in data.habits else 0.15):
+		_go(BOX_POSITIONS[rng.randi() % boxes], "box", rng.randf_range(8.0, 14.0))
+		if "curious" in data.habits:
+			habit_shown.emit(data.id, "curious")
+		return
 	if roll < sleep_bias * 0.5:
-		_set_state("sleep", rng.randf_range(15.0, 30.0))
+		if "cushion" in owned:
+			_go(CUSHION_POS + Vector3(rng.randf_range(-0.15, 0.15), 0, 0), "sleep", rng.randf_range(15.0, 30.0))
+		else:
+			_set_state("sleep", rng.randf_range(15.0, 30.0))
 		_emit_behavior("sleep")
+		return
+	if "scratcher" in owned and rng.randf() < 0.15:
+		_go(SCRATCHER_POS + Vector3(0.35, 0, 0.35), "scratch", 4.0)
+		return
+	if "cat_tower" in owned and rng.randf() < 0.15:
+		_go(TOWER_POS + Vector3(0, 0, 0.45), "perch", rng.randf_range(10.0, 16.0))
 		return
 	var approach := data.param("approach") * (0.4 + data.intimacy / 100.0)
 	if rng.randf() < approach:
@@ -214,6 +241,12 @@ func _process(delta: float) -> void:
 				_set_state(then[0], then[1])
 				if then[0] == "sit_window":
 					habit_shown.emit(data.id, "window_spot")
+				elif then[0] == "box":
+					_emit_behavior("box_sit")
+				elif then[0] == "scratch":
+					_emit_behavior("scratch")
+				elif then[0] == "perch":
+					_emit_behavior("tower_perch")
 				if then[0] == "eat" and "groom_after_meal" in data.habits:
 					set_meta("groom_next", true)
 			else:
@@ -266,12 +299,17 @@ func _animate(t: float, delta: float) -> void:
 			pitch = 20.0 + sin(t * 6.0) * 15.0
 		"wait_food":
 			pitch = 15.0
+		"scratch":
+			pitch = -25.0 + sin(t * 14.0) * 8.0
+		"perch":
+			pitch = 20.0
 		"approach", "jealous":
 			pitch = -15.0
 		"play":
 			position.y = absf(sin(t * 6.0)) * 0.25
 	if state != "play":
-		position.y = lerpf(position.y, 0.0, delta * 8.0)
+		var ground := TOWER_TOP if state == "perch" else (0.04 if state == "box" else 0.0)
+		position.y = lerpf(position.y, ground, delta * 6.0)
 	head.rotation_degrees.x = lerpf(head.rotation_degrees.x, pitch, delta * 4.0)
 
 	if is_annoyed():

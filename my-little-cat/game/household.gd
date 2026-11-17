@@ -8,6 +8,10 @@ const MAX_CATS := 3
 const DAILY_INTIMACY_CAP := 15.0   # positive intimacy per cat per day: steady care beats grinding
 const DIARY_LIMIT := 500
 const JEALOUSY_STREAK := 3
+const START_COINS := 300
+const ATTENDANCE_COINS := 50
+const DAILY_CARE_COIN_CAP := 150     # coins from care actions per day
+const MAX_BOXES := 2
 
 var cats: Array[CatData] = []
 var diary: Array = []                 # {t, cat_id, text}
@@ -15,6 +19,13 @@ var discovered_behaviors: Array = []  # behavior ids seen at least once (behavio
 var daily_gain := {}                  # {"<day>": {"<cat_id>": gained}}
 var diary_seen := 0                  # diary entries already viewed in the phone (unread badge)
 var adopted_candidates: Array = []   # adoption-center candidate ids already taken
+var coins := START_COINS
+var inventory := {"dry_food": 10}   # consumable servings
+var owned: Array = []               # toys and furniture already delivered
+var orders: Array = []              # {id, item, arrives_at}
+var boxes := 0                      # empty delivery boxes in the room
+var daily_coins := {}               # {"<day>": earned_from_care}
+var last_attendance := ""
 var attention_cat := ""               # id of the cat that got the latest attention
 var attention_streak := 0
 
@@ -169,17 +180,48 @@ func jealous_cats() -> Array[CatData]:
 
 # ---------- care actions (return intimacy delta) ----------
 
-func feed(cat: CatData, now: int) -> float:
+## Best food in stock: wet food first, then dry food. "" if none.
+func best_food() -> String:
+	for id in ["wet_food", "dry_food"]:
+		if int(inventory.get(id, 0)) > 0:
+			return id
+	return ""
+
+
+func feed(cat: CatData, now: int, food_id := "") -> float:
+	if food_id == "":
+		food_id = best_food()
+	if food_id == "" or int(inventory.get(food_id, 0)) <= 0:
+		return 0.0
+	var item := Catalog.item(food_id)
+	inventory[food_id] = int(inventory[food_id]) - 1
 	cat.advance(now)
-	cat.hunger = minf(100.0, cat.hunger + 40.0)
+	cat.hunger = minf(100.0, cat.hunger + float(item["hunger"]))
+	cat.happiness = minf(100.0, cat.happiness + float(item["happy"]))
 	_first(cat, "first_feed", "%s에게 처음으로 밥을 줬어요." % cat.cat_name, now)
 	note_attention(cat)
+	earn_care_coins(5, now)
 	return change_intimacy(cat, 1.0, now)
+
+
+func give_treat(cat: CatData, now: int) -> float:
+	if int(inventory.get("treat", 0)) <= 0:
+		return 0.0
+	var item := Catalog.item("treat")
+	inventory["treat"] = int(inventory["treat"]) - 1
+	cat.advance(now)
+	cat.hunger = minf(100.0, cat.hunger + float(item["hunger"]))
+	cat.happiness = minf(100.0, cat.happiness + float(item["happy"]))
+	_first(cat, "first_treat", "%s에게 처음으로 간식을 줬어요. 눈이 반짝였어요." % cat.cat_name, now)
+	note_attention(cat)
+	return change_intimacy(cat, 2.0, now)
 
 
 func play(cat: CatData, now: int) -> float:
 	cat.advance(now)
-	cat.happiness = minf(100.0, cat.happiness + 30.0 * cat.param("play_mult"))
+	var toy_mult := 1.3 if "feather" in owned else 1.0
+	cat.happiness = minf(100.0, cat.happiness + 30.0 * cat.param("play_mult") * toy_mult)
+	earn_care_coins(8, now)
 	cat.hunger = maxf(CatData.FLOOR, cat.hunger - 3.0)
 	_first(cat, "first_play", "%s와 처음으로 함께 놀았어요." % cat.cat_name, now)
 	note_attention(cat)
@@ -217,6 +259,76 @@ func comfort_jealous(cat: CatData, now: int) -> float:
 	return change_intimacy(cat, 2.0, now)
 
 
+# ---------- coins, market, delivery ----------
+
+## Coins for care actions, limited per day so tapping cannot farm the shop.
+func earn_care_coins(amount: int, now: int) -> int:
+	var dk := day_key(now)
+	var used := int(daily_coins.get(dk, 0))
+	var give := clampi(amount, 0, maxi(0, DAILY_CARE_COIN_CAP - used))
+	daily_coins = {dk: used + give}
+	coins += give
+	return give
+
+
+## First visit of the day pays attendance coins. Returns coins given (0 if already claimed).
+func claim_attendance(now: int) -> int:
+	var dk := day_key(now)
+	if last_attendance == dk:
+		return 0
+	last_attendance = dk
+	coins += ATTENDANCE_COINS
+	return ATTENDANCE_COINS
+
+
+func is_owned_or_ordered(item_id: String) -> bool:
+	if item_id in owned:
+		return true
+	for o in orders:
+		if o["item"] == item_id:
+			return true
+	return false
+
+
+## Returns "" on success, otherwise a message explaining why the order failed.
+func order(item_id: String, now: int) -> String:
+	var item := Catalog.item(item_id)
+	if item.is_empty():
+		return "없는 상품이에요"
+	if item["kind"] in ["toy", "furniture"] and is_owned_or_ordered(item_id):
+		return "이미 가지고 있거나 배송 중이에요"
+	if coins < int(item["price"]):
+		return "코인이 부족해요"
+	coins -= int(item["price"])
+	orders.append({"id": "%d-%d" % [now, randi() % 100000], "item": item_id, "arrives_at": now + int(item["delivery"]) * 60})
+	return ""
+
+
+## Moves arrived orders into the home. Returns the item ids that just arrived.
+func receive_deliveries(now: int) -> Array:
+	var arrived: Array = []
+	var waiting: Array = []
+	for o in orders:
+		if int(o["arrives_at"]) <= now:
+			arrived.append(o["item"])
+		else:
+			waiting.append(o)
+	orders = waiting
+	for item_id in arrived:
+		var item := Catalog.item(item_id)
+		if item["kind"] in ["food", "treat"]:
+			inventory[item_id] = int(inventory.get(item_id, 0)) + int(item["servings"])
+		elif not item_id in owned:
+			owned.append(item_id)
+		boxes = mini(MAX_BOXES, boxes + 1)
+		log_event(null, "택배 도착: %s" % item["name"], now)
+	return arrived
+
+
+func clear_boxes() -> void:
+	boxes = 0
+
+
 # ---------- discovery ----------
 
 func discover_habit(cat: CatData, habit: String, now: int) -> bool:
@@ -225,6 +337,7 @@ func discover_habit(cat: CatData, habit: String, now: int) -> bool:
 	cat.discovered_habits.append(habit)
 	var h: Dictionary = Traits.HABITS[habit]
 	log_event(cat, "새로운 습관 발견: %s — %s" % [h["label"], h["hint"]], now)
+	coins += 30  # discovery rewards are one-time, so they are not part of the daily cap
 	return true
 
 
@@ -232,6 +345,7 @@ func record_behavior(behavior_id: String) -> bool:
 	if behavior_id in discovered_behaviors:
 		return false
 	discovered_behaviors.append(behavior_id)
+	coins += 20
 	return true
 
 
@@ -245,6 +359,8 @@ func to_dict() -> Dictionary:
 		"version": SAVE_VERSION, "cats": cat_dicts, "diary": diary,
 		"discovered_behaviors": discovered_behaviors, "daily_gain": daily_gain,
 		"adopted_candidates": adopted_candidates, "diary_seen": diary_seen,
+		"coins": coins, "inventory": inventory, "owned": owned, "orders": orders, "boxes": boxes,
+		"daily_coins": daily_coins, "last_attendance": last_attendance,
 	}
 
 
@@ -257,6 +373,15 @@ static func from_dict(d: Dictionary) -> Household:
 	h.discovered_behaviors = Array(d.get("discovered_behaviors", []))
 	h.adopted_candidates = Array(d.get("adopted_candidates", []))
 	h.diary_seen = int(d.get("diary_seen", 0))
+	h.coins = int(d.get("coins", START_COINS))
+	var inv = d.get("inventory", {"dry_food": 10})
+	h.inventory = inv if inv is Dictionary else {}
+	h.owned = Array(d.get("owned", []))
+	h.orders = Array(d.get("orders", []))
+	h.boxes = int(d.get("boxes", 0))
+	var dc = d.get("daily_coins", {})
+	h.daily_coins = dc if dc is Dictionary else {}
+	h.last_attendance = str(d.get("last_attendance", ""))
 	var dg = d.get("daily_gain", {})
 	h.daily_gain = dg if dg is Dictionary else {}
 	return h

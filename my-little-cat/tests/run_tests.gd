@@ -76,5 +76,34 @@ func _init() -> void:
 	var p := Household.random_profile(rng)
 	check(p["personalities"].size() >= 1 and p["habits"].size() >= 2, "random profile is complete")
 
+	print("economy")
+	var e := Household.new()
+	var cat := e.adopt("나비", "cheese", ["affectionate"], [], t0)
+	check(e.claim_attendance(t0) == Household.ATTENDANCE_COINS and e.claim_attendance(t0 + 60) == 0, "attendance once per day")
+	var start_food := int(e.inventory["dry_food"])
+	e.feed(cat, t0 + 10)
+	check(int(e.inventory["dry_food"]) == start_food - 1, "feeding uses one serving")
+	e.inventory["dry_food"] = 0
+	check(e.feed(cat, t0 + 20) == 0.0 and e.best_food() == "", "no food: feeding does nothing")
+	e.coins = 1000
+	var coins_before := e.coins
+	check(e.order("cat_tower", t0) == "", "order furniture")
+	check(e.coins == coins_before - 400, "price paid")
+	check(e.order("cat_tower", t0) != "", "cannot order the same furniture twice")
+	e.coins = 0
+	check(e.order("dry_food", t0) == "코인이 부족해요", "not enough coins")
+	check(e.receive_deliveries(t0 + 60).is_empty(), "not delivered early")
+	var got := e.receive_deliveries(t0 + 3600)
+	check(got == ["cat_tower"] and "cat_tower" in e.owned and e.boxes == 1, "furniture delivered with a box")
+	var farmed := 0
+	for i in 100:
+		farmed += e.earn_care_coins(5, t0 + 86400 * 2 + i)  # a fresh day
+	check(farmed == Household.DAILY_CARE_COIN_CAP, "care coins capped per day")
+	var path2 := "user://test_economy.json"
+	e.save(path2)
+	var e2 := Household.load_from(path2)
+	check(e2.coins == e.coins and e2.owned == e.owned and e2.boxes == 1, "economy survives save/load")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path2))
+
 	print("\n%s (%d failures)" % ["PASS" if failures == 0 else "FAILED", failures])
 	quit(1 if failures > 0 else 0)

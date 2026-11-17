@@ -24,6 +24,13 @@ func _initialize() -> void:
 	main.phone._adopt(main.household.adoption_candidates(main.now())[0])
 	main._on_pet()
 	main._on_feed()
+	main.household.coins = 2000
+	main.phone._open_app("market")
+	await _shot(dir, "08_market")
+	for item in ["cat_tower", "cushion", "scratcher"]:
+		main.phone._buy(item)
+	main.time_offset += 7200
+	main._check_deliveries()
 	main.phone._open_app("notes")
 	await _shot(dir, "04_notes")
 	main.phone._open_app("dex")

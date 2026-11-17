@@ -24,6 +24,9 @@ var blink_button: Button
 var tabs: HBoxContainer
 var phone: PhoneUI
 var phone_button: Button
+var coin_label: Label
+var props: Node3D            # furniture and delivery boxes, rebuilt when they change
+var delivery_check := 0.0
 
 
 func now() -> int:
@@ -43,6 +46,28 @@ func _ready() -> void:
 	for c in household.cats:
 		_spawn(c)
 	_select(household.cats[0].id)
+	_check_deliveries()
+	_refresh_props()
+	_check_attendance()
+
+
+func _check_attendance() -> void:
+	var got := household.claim_attendance(now())
+	if got > 0:
+		_toast("오늘의 출석 보상: 코인 +%d" % got)
+		household.save()
+
+
+func _check_deliveries() -> void:
+	var arrived := household.receive_deliveries(now())
+	if arrived.is_empty():
+		return
+	var names: Array = []
+	for id in arrived:
+		names.append(Catalog.item(id)["name"])
+	_toast("딩동! 택배 도착: %s" % ", ".join(names))
+	_refresh_props()
+	household.save()
 
 
 func _notification(what: int) -> void:
@@ -53,6 +78,8 @@ func _notification(what: int) -> void:
 		household.save()
 	elif what == NOTIFICATION_APPLICATION_RESUMED:
 		household.advance_all(now())
+		_check_deliveries()
+		_check_attendance()
 
 
 func _sel() -> CatData:
@@ -133,6 +160,62 @@ func _build_room() -> void:
 	cam.position = Vector3(0.0, 3.4, 4.6)
 	add_child(cam)
 	cam.look_at(Vector3(-0.2, 0.0, -0.4))
+
+
+func _refresh_props() -> void:
+	if props:
+		props.queue_free()
+	props = Node3D.new()
+	add_child(props)
+	var wood := _mat(Color("a9825f"))
+	var fabric := _mat(Color("c7a4c9"), 1.0)
+	var rope := _mat(Color("d6c19a"), 1.0)
+	if "cushion" in household.owned:
+		var c := CylinderMesh.new()
+		c.top_radius = 0.42
+		c.bottom_radius = 0.45
+		c.height = 0.08
+		_prop(c, fabric, CatActor.CUSHION_POS + Vector3(0, 0.04, 0))
+	if "scratcher" in household.owned:
+		var base := BoxMesh.new()
+		base.size = Vector3(0.4, 0.05, 0.4)
+		_prop(base, wood, CatActor.SCRATCHER_POS + Vector3(0, 0.025, 0))
+		var post := CylinderMesh.new()
+		post.top_radius = 0.07
+		post.bottom_radius = 0.07
+		post.height = 0.7
+		_prop(post, rope, CatActor.SCRATCHER_POS + Vector3(0, 0.4, 0))
+	if "cat_tower" in household.owned:
+		var pole := CylinderMesh.new()
+		pole.top_radius = 0.09
+		pole.bottom_radius = 0.09
+		pole.height = CatActor.TOWER_TOP
+		_prop(pole, rope, CatActor.TOWER_POS + Vector3(0, CatActor.TOWER_TOP / 2.0, 0))
+		for h in [0.05, 0.6, CatActor.TOWER_TOP]:
+			var shelf := BoxMesh.new()
+			shelf.size = Vector3(0.7, 0.06, 0.7)
+			_prop(shelf, fabric, CatActor.TOWER_POS + Vector3(0, h, 0))
+	var box_mat := _mat(Color("c9a173"), 1.0)
+	for i in household.boxes:
+		var p: Vector3 = CatActor.BOX_POSITIONS[i]
+		var bottom := BoxMesh.new()
+		bottom.size = Vector3(0.6, 0.04, 0.45)
+		_prop(bottom, box_mat, p + Vector3(0, 0.02, 0))
+		for side in [-1, 1]:
+			var wall_x := BoxMesh.new()
+			wall_x.size = Vector3(0.04, 0.3, 0.45)
+			_prop(wall_x, box_mat, p + Vector3(0.3 * side, 0.15, 0))
+			var wall_z := BoxMesh.new()
+			wall_z.size = Vector3(0.6, 0.3, 0.04)
+			_prop(wall_z, box_mat, p + Vector3(0, 0.15, 0.225 * side))
+
+
+func _prop(mesh: Mesh, mat: Material, pos: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	props.add_child(mi)
 
 
 func _spawn(c: CatData) -> void:
@@ -236,8 +319,15 @@ func _build_ui() -> void:
 	var info := VBoxContainer.new()
 	info.add_theme_constant_override("separation", 8)
 	card.add_child(info)
+	var title_row := HBoxContainer.new()
+	info.add_child(title_row)
 	title_label = _label("", 34)
-	info.add_child(title_label)
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(title_label)
+	coin_label = _label("", 22, Color("8a6a2a"))
+	coin_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	coin_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	title_row.add_child(coin_label)
 	trait_label = _label("", 20, SUB)
 	info.add_child(trait_label)
 	hunger_bar = _bar("배부름", info, Color("f2a65a"))
@@ -265,6 +355,7 @@ func _build_ui() -> void:
 	col.add_child(row1)
 	_button("쓰다듬기", row1, _on_pet, 88, Color("e8946a"))
 	_button("밥 주기", row1, _on_feed, 88, Color("f2a65a"))
+	_button("간식", row1, _on_treat, 88, Color("d98aa8"))
 	_button("놀아주기", row1, _on_play, 88, Color("6cbf98"))
 
 	var row2 := HBoxContainer.new()
@@ -278,6 +369,7 @@ func _build_ui() -> void:
 	layer.add_child(phone)
 	phone.setup(household, now)
 	phone.adopted.connect(_on_adopted)
+	phone.props_changed.connect(_refresh_props)
 
 
 func _rebuild_tabs() -> void:
@@ -320,6 +412,11 @@ func _process(delta: float) -> void:
 	bond_bar.value = c.intimacy
 	signal_label.text = a.signal_text()
 	blink_button.visible = a.is_blinking()
+	coin_label.text = "코인 %d · 사료 %d · 간식 %d" % [household.coins, int(household.inventory.get("dry_food", 0)) + int(household.inventory.get("wet_food", 0)), int(household.inventory.get("treat", 0))]
+	delivery_check -= delta
+	if delivery_check <= 0.0:
+		delivery_check = 5.0
+		_check_deliveries()
 	var unread := phone.unread_count()
 	phone_button.text = "스마트폰 (새 기록 %d)" % unread if unread > 0 else "스마트폰 열기"
 	if toast_left > 0.0:
@@ -361,9 +458,22 @@ func _on_pet() -> void:
 
 func _on_feed() -> void:
 	var c := _sel()
+	if household.best_food() == "":
+		_toast("사료가 다 떨어졌어요. 스마트폰의 냥마켓에서 주문해 주세요")
+		return
 	var d := household.feed(c, now())
 	_actor().on_feed()
 	_after_action(c, d, "")
+
+
+func _on_treat() -> void:
+	var c := _sel()
+	if int(household.inventory.get("treat", 0)) <= 0:
+		_toast("간식이 없어요. 냥마켓에서 츄르를 주문해 보세요")
+		return
+	var d := household.give_treat(c, now())
+	_actor().on_feed()
+	_after_action(c, d, "%s(이)가 간식을 맛있게 먹었어요" % c.cat_name)
 
 
 func _on_play() -> void:
@@ -405,6 +515,7 @@ func _on_behavior_seen(behavior_id: String) -> void:
 func _on_skip_hour() -> void:
 	time_offset += 3600
 	household.advance_all(now())
+	_check_deliveries()
 	household.save()
 
 

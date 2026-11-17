@@ -5,6 +5,7 @@ extends Control
 
 signal adopted(cat: CatData)
 signal closed
+signal props_changed   # furniture or boxes changed (room must redraw)
 
 const APPS := [
 	{"id": "market", "name": "냥마켓", "color": Color("f2a65a"), "glyph": "마켓"},
@@ -26,6 +27,7 @@ var clock_label: Label
 var screen: VBoxContainer       # current app content goes here
 var notes_filter := ""          # "" = all cats
 var dex_tab := "behavior"
+var market_tab := "shop"
 
 
 func setup(house: Household, now_callable: Callable) -> void:
@@ -200,7 +202,7 @@ func _show_home() -> void:
 func _open_app(id: String) -> void:
 	match id:
 		"market":
-			_coming_soon("냥마켓", "사료, 간식, 장난감, 가구를 주문하면 실제 시간이 지나 택배로 도착해요. 다 쓴 택배 상자는 고양이들의 놀이터가 돼요.")
+			_show_market()
 		"camera":
 			_coming_soon("카메라", "고양이를 촬영하고 앨범에 모아요. 찍는 순간 어떤 고양이가 무슨 행동을 하는지 자동으로 기록돼요.")
 		"adopt":
@@ -218,6 +220,82 @@ func _coming_soon(title: String, desc: String) -> void:
 	var card := _card()
 	card.add_child(_label("곧 문을 열어요", 30, INK))
 	card.add_child(_label(desc, 24, SUB))
+
+
+# ---------- market ----------
+
+func _set_market_tab(tid: String) -> void:
+	market_tab = tid
+	_show_market()
+
+
+func _show_market() -> void:
+	_header("냥마켓")
+	var now: int = now_fn.call()
+	screen.add_child(_label("보유 코인 %d" % household.coins, 26, Color("8a6a2a")))
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 10)
+	screen.add_child(tabs)
+	for t in [["shop", "상품"], ["orders", "배송 %d" % household.orders.size()], ["storage", "보관함"]]:
+		var tid: String = t[0]
+		var b := _btn(t[1], _set_market_tab.bind(tid), Color("f2a65a") if market_tab == tid else Color("e3c9a8"), 24, 60)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tabs.add_child(b)
+
+	match market_tab:
+		"shop":
+			for id in Catalog.ITEMS:
+				var item: Dictionary = Catalog.ITEMS[id]
+				var card := _card()
+				card.add_child(_label("%s · %d코인" % [item["name"], item["price"]], 28, INK))
+				var eta := "%d분" % item["delivery"] if int(item["delivery"]) < 60 else "%d시간" % (int(item["delivery"]) / 60)
+				card.add_child(_label("%s  (배송 약 %s)" % [item["desc"], eta], 22, SUB))
+				var durable: bool = item["kind"] in ["toy", "furniture"]
+				var have := durable and household.is_owned_or_ordered(id)
+				var text := "보유 중 / 배송 중" if have else "주문하기"
+				var b := _btn(text, _buy.bind(id), Color("f2a65a"))
+				b.disabled = have or household.coins < int(item["price"])
+				card.add_child(b)
+		"orders":
+			if household.orders.is_empty():
+				screen.add_child(_label("배송 중인 택배가 없어요.", 24, SUB))
+			for o in household.orders:
+				var card := _card()
+				var left := maxi(0, int(o["arrives_at"]) - now)
+				card.add_child(_label(Catalog.item(o["item"])["name"], 28, INK))
+				card.add_child(_label("약 %d분 후 도착" % ceili(left / 60.0), 22, SUB))
+		"storage":
+			var card := _card()
+			card.add_child(_label("먹이", 28, INK))
+			for id in ["dry_food", "wet_food", "treat"]:
+				card.add_child(_label("%s: %d개" % [Catalog.item(id)["name"], int(household.inventory.get(id, 0))], 22, SUB))
+			var card2 := _card()
+			card2.add_child(_label("장난감·가구", 28, INK))
+			if household.owned.is_empty():
+				card2.add_child(_label("아직 없어요", 22, SUB))
+			for id in household.owned:
+				card2.add_child(_label(Catalog.item(id)["name"], 22, SUB))
+			var card3 := _card()
+			card3.add_child(_label("방에 있는 택배 상자: %d개" % household.boxes, 28, INK))
+			card3.add_child(_label("고양이들이 상자 안에 들어가 놀아요.", 22, SUB))
+			var clear := _btn("상자 정리하기", _clear_boxes, Color("9a8f86"))
+			clear.disabled = household.boxes == 0
+			card3.add_child(clear)
+
+
+func _buy(item_id: String) -> void:
+	var err := household.order(item_id, now_fn.call())
+	household.save()
+	_show_market()
+	if err != "":
+		screen.add_child(_label(err, 24, Color("b04a3a")))
+
+
+func _clear_boxes() -> void:
+	household.clear_boxes()
+	household.save()
+	props_changed.emit()
+	_show_market()
 
 
 # ---------- adoption center ----------
