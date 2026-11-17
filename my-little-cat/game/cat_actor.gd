@@ -41,6 +41,7 @@ var tail: Node3D
 var ears: Array[Node3D] = []
 var eyes: Array[MeshInstance3D] = []
 var badge: Label3D
+var model: CatModel   # purchased rigged cat when the asset files are present
 var ring: MeshInstance3D
 
 
@@ -48,7 +49,10 @@ func setup(cat: CatData, house: Household) -> void:
 	data = cat
 	household = house
 	rng.seed = hash(cat.id)
-	_build_body()
+	if CatModel.available():
+		_build_model()
+	else:
+		_build_body()
 	position = Vector3(rng.randf_range(-1.5, 1.5), 0, rng.randf_range(-1.5, 0.8))
 
 
@@ -100,6 +104,8 @@ func set_selected(v: bool) -> void:
 # ---------- reactions to player actions ----------
 
 func on_pet() -> void:
+	if model and not is_annoyed() and not is_sleeping():
+		model.play_pet(rng)
 	if is_annoyed():
 		touched_while_annoyed = true
 		annoyed_left = maxf(annoyed_left, 4.0)  # touching an annoyed cat makes it last longer
@@ -269,7 +275,16 @@ func _process(delta: float) -> void:
 	_animate(t, delta)
 
 
+func _anim_state() -> String:
+	if state == "walk":
+		return "run" if speed > 1.5 else "walk"
+	return state
+
+
 func _animate(t: float, delta: float) -> void:
+	if model:
+		_animate_model(delta)
+		return
 	var sleeping := is_sleeping()
 	var lie := 1.0 if sleeping else 0.0
 	body.position.y = lerpf(body.position.y, -0.1 * lie, delta * 3.0)
@@ -324,6 +339,41 @@ func _animate(t: float, delta: float) -> void:
 		badge.text = ""
 
 
+func _animate_model(delta: float) -> void:
+	model.tick(delta, rng, _anim_state())
+	var o := model.overlay
+	o.ears_back = lerpf(o.ears_back, 1.0 if is_annoyed() else 0.0, delta * 8.0)
+	o.tail_lash = lerpf(o.tail_lash, 1.0 if is_annoyed() else 0.0, delta * 6.0)
+	o.tail_up = lerpf(o.tail_up, 1.0 if state in ["approach", "jealous"] else 0.0, delta * 3.0)
+	var eyes := 0.0
+	if is_blinking():
+		eyes = 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * 1.8)  # slow blink
+	o.eyes_closed = lerpf(o.eyes_closed, eyes, delta * 6.0)
+	var ground := TOWER_TOP if state == "perch" else (0.04 if state == "box" else 0.0)
+	position.y = lerpf(position.y, ground, delta * 6.0)
+	_update_badge()
+
+
+func _update_badge() -> void:
+	if is_annoyed():
+		badge.text = "!!"
+	elif is_blinking():
+		badge.text = "♥"
+	elif is_sleeping():
+		badge.text = "Zz"
+	elif data.need() == "hungry":
+		badge.text = "밥?"
+	else:
+		badge.text = ""
+
+
+func _build_model() -> void:
+	model = CatModel.new()
+	add_child(model)
+	model.setup(int(Traits.coat(data.coat)["albedo"]), rng)
+	_build_common()
+
+
 # ---------- placeholder body ----------
 
 func _mat(c: Color, rough := 0.8) -> StandardMaterial3D:
@@ -343,7 +393,7 @@ func _part(mesh: Mesh, mat: Material, pos: Vector3, parent: Node3D) -> MeshInsta
 
 
 func _build_body() -> void:
-	var coat: Dictionary = Traits.COATS.get(data.coat, Traits.COATS["cheese"])
+	var coat: Dictionary = Traits.coat(data.coat)
 	var fur := _mat(coat["fur"])
 	var cream := _mat(coat["cream"])
 	var eye_mat := _mat(Color("f2d36b") if data.coat in ["black", "tuxedo"] else Color("2b2320"), 0.2)
@@ -392,6 +442,10 @@ func _build_body() -> void:
 	tail_mesh.height = 0.4
 	_part(tail_mesh, fur, Vector3(0, 0.18, -0.05), tail).rotation_degrees = Vector3(-25, 0, 0)
 
+	_build_common()
+
+
+func _build_common() -> void:
 	badge = Label3D.new()
 	badge.font = load("res://fonts/NanumGothicBold.ttf")
 	badge.font_size = 64

@@ -60,13 +60,20 @@ const HABITS := {
 	"loner": {"label": "혼자가 좋아", "hint": "가끔은 다른 고양이와 떨어져 쉬어요"},
 }
 
+## albedo = texture index of the purchased cat asset (CatSimple_Albedo_N.png).
+## fur/cream are used by UI swatches and the placeholder body.
 const COATS := {
-	"cheese": {"label": "치즈", "fur": Color("f2a65a"), "cream": Color("fbe3c4")},
-	"gray": {"label": "회색", "fur": Color("8f9499"), "cream": Color("e6e6e6")},
-	"black": {"label": "올블랙", "fur": Color("2e2a2a"), "cream": Color("4a4444")},
-	"cream": {"label": "크림", "fur": Color("ead7b8"), "cream": Color("faf3e6")},
-	"tuxedo": {"label": "턱시도", "fur": Color("26262b"), "cream": Color("f4f4f4")},
+	"cheese": {"label": "치즈", "albedo": 5, "fur": Color("e39a4f"), "cream": Color("fbe3c4")},
+	"tabby": {"label": "고등어", "albedo": 6, "fur": Color("7a6450"), "cream": Color("d8c3a5")},
+	"black": {"label": "올블랙", "albedo": 1, "fur": Color("2e2a2a"), "cream": Color("4a4444")},
+	"white": {"label": "하양", "albedo": 2, "fur": Color("f1ede6"), "cream": Color("faf6f0")},
+	"tuxedo": {"label": "턱시도", "albedo": 3, "fur": Color("26262b"), "cream": Color("f4f4f4")},
+	"cow": {"label": "젖소", "albedo": 4, "fur": Color("f4f1ec"), "cream": Color("2b2b2b")},
 }
+
+
+static func coat(id: String) -> Dictionary:
+	return COATS.get(id, COATS["cheese"])
 
 
 static func personality(id: String) -> Dictionary:

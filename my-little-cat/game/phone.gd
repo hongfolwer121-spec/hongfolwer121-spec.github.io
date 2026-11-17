@@ -311,7 +311,7 @@ func _show_adopt() -> void:
 		card.add_child(row)
 		var swatch := Panel.new()
 		swatch.custom_minimum_size = Vector2(84, 84)
-		var coat: Dictionary = Traits.COATS[cand["coat"]]
+		var coat: Dictionary = Traits.coat(cand["coat"])
 		var sw := _box(coat["fur"], 42)
 		sw.border_color = coat["cream"]
 		sw.set_border_width_all(6)
