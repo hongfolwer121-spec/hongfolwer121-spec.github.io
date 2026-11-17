@@ -88,40 +88,40 @@ func _build_room() -> void:
 	e.background_color = Color("2a2420")
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color("f3dcc4")
-	e.ambient_light_energy = 0.55
-	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.ambient_light_energy = 0.35
+	e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env.environment = e
 	add_child(env)
 
 	var sun := DirectionalLight3D.new()
 	sun.light_color = Color("ffe2b8")
-	sun.light_energy = 1.3
+	sun.light_energy = 0.75
 	sun.shadow_enabled = true
 	sun.rotation_degrees = Vector3(-50, -35, 0)
 	add_child(sun)
 
 	var floor_mesh := PlaneMesh.new()
 	floor_mesh.size = Vector2(6, 6)
-	_mesh(floor_mesh, _mat(Color("b88a5f")), Vector3.ZERO)
+	_mesh(floor_mesh, _mat(Color("8c705e")), Vector3.ZERO)
 	var back := BoxMesh.new()
 	back.size = Vector3(6, 3, 0.1)
-	_mesh(back, _mat(Color("ecdcc5")), Vector3(0, 1.5, -3))
+	_mesh(back, _mat(Color("d8cfc4")), Vector3(0, 1.5, -3))
 	var left := BoxMesh.new()
 	left.size = Vector3(0.1, 3, 6)
-	_mesh(left, _mat(Color("e4d2b8")), Vector3(-3, 1.5, 0))
+	_mesh(left, _mat(Color("cfc4b6")), Vector3(-3, 1.5, 0))
 	var window := BoxMesh.new()
 	window.size = Vector3(0.05, 0.9, 1.2)
 	var win_mat := _mat(Color("cfe8f5"), 0.1)
 	win_mat.emission_enabled = true
 	win_mat.emission = Color("fff1d6")
-	win_mat.emission_energy_multiplier = 0.6
+	win_mat.emission_energy_multiplier = 0.3
 	_mesh(window, win_mat, Vector3(-2.94, 1.4, -0.6))
 
 	var rug := CylinderMesh.new()
 	rug.top_radius = 1.2
 	rug.bottom_radius = 1.2
 	rug.height = 0.02
-	_mesh(rug, _mat(Color("e9b8aa"), 1.0), Vector3(0, 0.01, 0)).scale = Vector3(1, 1, 0.7)
+	_mesh(rug, _mat(Color("d9a89c"), 1.0), Vector3(0, 0.01, 0)).scale = Vector3(1, 1, 0.7)
 	var bowl := CylinderMesh.new()
 	bowl.top_radius = 0.16
 	bowl.bottom_radius = 0.12
@@ -129,10 +129,10 @@ func _build_room() -> void:
 	_mesh(bowl, _mat(Color("7fb0d9"), 0.3), CatActor.BOWL_POS + Vector3(0, 0.04, 0))
 
 	var cam := Camera3D.new()
-	cam.fov = 55
-	cam.position = Vector3(0.6, 2.1, 3.6)
+	cam.fov = 60
+	cam.position = Vector3(0.0, 3.4, 4.6)
 	add_child(cam)
-	cam.look_at(Vector3(-0.1, 0.2, -0.2))
+	cam.look_at(Vector3(-0.2, 0.0, -0.4))
 
 
 func _spawn(c: CatData) -> void:
@@ -149,31 +149,61 @@ func _spawn(c: CatData) -> void:
 
 # ---------- UI ----------
 
+const INK := Color("3a2f28")
+const SUB := Color("6e5f55")
+
+
+func _box(color: Color, radius := 18, pad := 14) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.set_corner_radius_all(radius)
+	sb.content_margin_left = pad
+	sb.content_margin_right = pad
+	sb.content_margin_top = pad * 0.6
+	sb.content_margin_bottom = pad * 0.6
+	return sb
+
+
+func _label(text: String, size: int, color := INK) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", color)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return l
+
+
 func _bar(label_text: String, parent: Control, color: Color) -> ProgressBar:
 	var row := HBoxContainer.new()
 	parent.add_child(row)
-	var l := Label.new()
-	l.text = label_text
-	l.custom_minimum_size = Vector2(110, 0)
-	l.add_theme_font_size_override("font_size", 24)
+	var l := _label(label_text, 22)
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	l.custom_minimum_size = Vector2(96, 0)
 	row.add_child(l)
 	var b := ProgressBar.new()
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.custom_minimum_size = Vector2(0, 26)
+	b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	b.custom_minimum_size = Vector2(0, 22)
 	b.show_percentage = false
-	var fill := StyleBoxFlat.new()
-	fill.bg_color = color
-	b.add_theme_stylebox_override("fill", fill)
+	b.add_theme_stylebox_override("fill", _box(color, 11, 0))
+	b.add_theme_stylebox_override("background", _box(Color("e8ddd2"), 11, 0))
 	row.add_child(b)
 	return b
 
 
-func _button(text: String, parent: Control, cb: Callable, height := 88) -> Button:
+func _button(text: String, parent: Control, cb: Callable, height := 88, color := Color("f2a65a")) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(0, height)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.add_theme_font_size_override("font_size", 28)
+	b.add_theme_font_size_override("font_size", 26)
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		b.add_theme_color_override(st, Color.WHITE)
+	b.add_theme_stylebox_override("normal", _box(color))
+	b.add_theme_stylebox_override("hover", _box(color.lightened(0.08)))
+	b.add_theme_stylebox_override("pressed", _box(color.darkened(0.15)))
+	b.add_theme_stylebox_override("hover_pressed", _box(color.darkened(0.15)))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	b.pressed.connect(cb)
 	parent.add_child(b)
 	return b
@@ -183,11 +213,11 @@ func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	var root := MarginContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("margin_left", 28)
-	root.add_theme_constant_override("margin_right", 28)
-	root.add_theme_constant_override("margin_top", 64)
-	root.add_theme_constant_override("margin_bottom", 48)
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_theme_constant_override("margin_left", 20)
+	root.add_theme_constant_override("margin_right", 20)
+	root.add_theme_constant_override("margin_top", 40)
+	root.add_theme_constant_override("margin_bottom", 32)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
 
@@ -200,57 +230,49 @@ func _build_ui() -> void:
 	tabs.add_theme_constant_override("separation", 10)
 	col.add_child(tabs)
 
-	title_label = Label.new()
-	title_label.add_theme_font_size_override("font_size", 40)
-	col.add_child(title_label)
-	trait_label = Label.new()
-	trait_label.add_theme_font_size_override("font_size", 22)
-	trait_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(trait_label)
-	hunger_bar = _bar("배부름", col, Color("f2a65a"))
-	happy_bar = _bar("행복", col, Color("7fc8a9"))
-	bond_bar = _bar("친밀도", col, Color("f08ca0"))
-	signal_label = Label.new()
-	signal_label.add_theme_font_size_override("font_size", 24)
-	signal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(signal_label)
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _box(Color(1.0, 0.98, 0.95, 0.93), 22, 20))
+	col.add_child(card)
+	var info := VBoxContainer.new()
+	info.add_theme_constant_override("separation", 8)
+	card.add_child(info)
+	title_label = _label("", 34)
+	info.add_child(title_label)
+	trait_label = _label("", 20, SUB)
+	info.add_child(trait_label)
+	hunger_bar = _bar("배부름", info, Color("f2a65a"))
+	happy_bar = _bar("행복", info, Color("6cbf98"))
+	bond_bar = _bar("친밀도", info, Color("f08ca0"))
+	signal_label = _label("", 22, Color("8a4b3a"))
+	info.add_child(signal_label)
 
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(spacer)
 
-	toast_label = Label.new()
-	toast_label.add_theme_font_size_override("font_size", 24)
-	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	toast_label = _label("", 22, Color.WHITE)
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var toast_bg := StyleBoxFlat.new()
-	toast_bg.bg_color = Color(0, 0, 0, 0.55)
-	toast_bg.set_corner_radius_all(14)
-	toast_bg.content_margin_left = 16
-	toast_bg.content_margin_right = 16
-	toast_bg.content_margin_top = 10
-	toast_bg.content_margin_bottom = 10
-	toast_label.add_theme_stylebox_override("normal", toast_bg)
+	toast_label.add_theme_stylebox_override("normal", _box(Color(0.16, 0.12, 0.1, 0.82), 16, 16))
 	toast_label.visible = false
 	col.add_child(toast_label)
 
-	blink_button = _button("눈인사로 답하기 ♥", col, _on_blink, 80)
+	blink_button = _button("눈인사로 답하기 ♥", col, _on_blink, 76, Color("f08ca0"))
 	blink_button.visible = false
 
 	var row1 := HBoxContainer.new()
-	row1.add_theme_constant_override("separation", 12)
+	row1.add_theme_constant_override("separation", 10)
 	col.add_child(row1)
-	_button("쓰다듬기", row1, _on_pet)
-	_button("밥 주기", row1, _on_feed)
-	_button("놀아주기", row1, _on_play)
+	_button("쓰다듬기", row1, _on_pet, 88, Color("e8946a"))
+	_button("밥 주기", row1, _on_feed, 88, Color("f2a65a"))
+	_button("놀아주기", row1, _on_play, 88, Color("6cbf98"))
 
 	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", 12)
+	row2.add_theme_constant_override("separation", 10)
 	col.add_child(row2)
-	phone_button = _button("스마트폰 열기", row2, _open_phone, 72)
+	phone_button = _button("스마트폰 열기", row2, _open_phone, 72, Color("4a3f38"))
 	if DEV_TOOLS:
-		_button("+1시간 (테스트)", row2, _on_skip_hour, 72)
+		_button("+1시간 (테스트)", row2, _on_skip_hour, 72, Color("9a8f86"))
 
 	phone = PhoneUI.new()
 	layer.add_child(phone)
@@ -263,9 +285,8 @@ func _rebuild_tabs() -> void:
 		ch.queue_free()
 	for c in household.cats:
 		var id: String = c.id
-		var b := _button(c.cat_name, tabs, func(): _select(id), 60)
-		b.toggle_mode = true
-		b.button_pressed = id == selected_id
+		var color := Color("f08ca0") if id == selected_id else Color("b8a89c")
+		_button(c.cat_name, tabs, func(): _select(id), 60, color)
 
 
 func _select(id: String) -> void:

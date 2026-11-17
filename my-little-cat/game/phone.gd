@@ -31,7 +31,7 @@ var dex_tab := "behavior"
 func setup(house: Household, now_callable: Callable) -> void:
 	household = house
 	now_fn = now_callable
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_build_frame()
 	visible = false
@@ -121,11 +121,11 @@ func _fmt_time(t: int) -> String:
 func _build_frame() -> void:
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(dim)
 
 	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	for side in ["left", "right"]:
 		margin.add_theme_constant_override("margin_" + side, 18)
 	margin.add_theme_constant_override("margin_top", 36)
