@@ -1,0 +1,235 @@
+class_name Household
+extends RefCounted
+## All cats plus shared records (diary, discovered behaviors). Single source of truth for saves.
+
+const SAVE_PATH := "user://household.json"
+const SAVE_VERSION := 1
+const MAX_CATS := 3
+const DAILY_INTIMACY_CAP := 15.0   # positive intimacy per cat per day: steady care beats grinding
+const DIARY_LIMIT := 500
+const JEALOUSY_STREAK := 3
+
+var cats: Array[CatData] = []
+var diary: Array = []                 # {t, cat_id, text}
+var discovered_behaviors: Array = []  # behavior ids seen at least once (behavior dex)
+var daily_gain := {}                  # {"<day>": {"<cat_id>": gained}}
+var attention_cat := ""               # id of the cat that got the latest attention
+var attention_streak := 0
+
+
+# ---------- helpers ----------
+
+static func day_key(now: int) -> String:
+	var bias_sec := int(Time.get_time_zone_from_system().get("bias", 0)) * 60
+	return str(int(floor(float(now + bias_sec) / 86400.0)))
+
+
+func find(id: String) -> CatData:
+	for c in cats:
+		if c.id == id:
+			return c
+	return null
+
+
+func log_event(cat: CatData, text: String, now: int) -> void:
+	diary.append({"t": now, "cat_id": cat.id if cat else "", "text": text})
+	if diary.size() > DIARY_LIMIT:
+		diary = diary.slice(diary.size() - DIARY_LIMIT)
+
+
+func _first(cat: CatData, key: String, text: String, now: int) -> void:
+	if key in cat.firsts:
+		return
+	cat.firsts.append(key)
+	log_event(cat, text, now)
+
+
+func advance_all(now: int) -> void:
+	for c in cats:
+		c.advance(now)
+
+
+# ---------- adoption ----------
+
+func adopt(cat_name: String, coat: String, personalities: Array, habits: Array, now: int) -> CatData:
+	if cats.size() >= MAX_CATS:
+		return null
+	var c := CatData.new()
+	c.id = "%d-%d" % [now, randi() % 1000000]
+	c.cat_name = cat_name
+	c.coat = coat
+	c.personalities = personalities
+	c.habits = habits
+	c.adopted_at = now
+	c.last_update = now
+	c.intimacy = 5.0
+	cats.append(c)
+	log_event(c, "%s(이)가 우리 집에 왔어요." % cat_name, now)
+	return c
+
+
+static func random_profile(rng: RandomNumberGenerator) -> Dictionary:
+	var p_ids := Traits.PERSONALITIES.keys()
+	var h_ids := Traits.HABITS.keys()
+	var personalities: Array = [p_ids[rng.randi() % p_ids.size()]]
+	if rng.randf() < 0.4:
+		var second = p_ids[rng.randi() % p_ids.size()]
+		if second != personalities[0]:
+			personalities.append(second)
+	var habits: Array = []
+	var habit_count := 2 + (rng.randi() % 2)
+	while habits.size() < habit_count:
+		var h = h_ids[rng.randi() % h_ids.size()]
+		if not h in habits:
+			habits.append(h)
+	var coats := Traits.COATS.keys()
+	return {"coat": coats[rng.randi() % coats.size()], "personalities": personalities, "habits": habits}
+
+
+# ---------- intimacy ----------
+
+## Applies an intimacy change. Positive gains respect the per-cat daily cap; losses always apply.
+## Returns the change actually applied.
+func change_intimacy(cat: CatData, amount: float, now: int) -> float:
+	var applied := amount
+	if amount > 0.0:
+		applied *= cat.param("intimacy_mult")
+		var dk := day_key(now)
+		var today: Dictionary = daily_gain.get(dk, {})
+		var used := float(today.get(cat.id, 0.0))
+		applied = clampf(applied, 0.0, maxf(0.0, DAILY_INTIMACY_CAP - used))
+		today[cat.id] = used + applied
+		daily_gain = {dk: today}  # only today's bucket is needed
+	var before := cat.intimacy
+	cat.intimacy = clampf(cat.intimacy + applied, 0.0, 100.0)
+	for m in range(10, 101, 10):
+		if before < m and cat.intimacy >= m and not m in cat.intimacy_milestones:
+			cat.intimacy_milestones.append(m)
+			log_event(cat, "%s와의 친밀도가 %d에 도달했어요." % [cat.cat_name, m], now)
+	return cat.intimacy - before
+
+
+func note_attention(cat: CatData) -> void:
+	if cat.id == attention_cat:
+		attention_streak += 1
+	else:
+		attention_cat = cat.id
+		attention_streak = 1
+
+
+## Cats with the "jealous" habit that should react because another cat got repeated attention.
+func jealous_cats() -> Array[CatData]:
+	var out: Array[CatData] = []
+	if attention_streak < JEALOUSY_STREAK:
+		return out
+	for c in cats:
+		if c.id != attention_cat and "jealous" in c.habits:
+			out.append(c)
+	return out
+
+
+# ---------- care actions (return intimacy delta) ----------
+
+func feed(cat: CatData, now: int) -> float:
+	cat.advance(now)
+	cat.hunger = minf(100.0, cat.hunger + 40.0)
+	_first(cat, "first_feed", "%s에게 처음으로 밥을 줬어요." % cat.cat_name, now)
+	note_attention(cat)
+	return change_intimacy(cat, 1.0, now)
+
+
+func play(cat: CatData, now: int) -> float:
+	cat.advance(now)
+	cat.happiness = minf(100.0, cat.happiness + 30.0 * cat.param("play_mult"))
+	cat.hunger = maxf(CatData.FLOOR, cat.hunger - 3.0)
+	_first(cat, "first_play", "%s와 처음으로 함께 놀았어요." % cat.cat_name, now)
+	note_attention(cat)
+	return change_intimacy(cat, 3.0 * cat.param("play_mult"), now)
+
+
+## Petting reads the cat's signals: annoyed or sleeping cats lose intimacy instead of gaining it.
+func pet(cat: CatData, now: int, annoyed: bool, sleeping: bool) -> float:
+	cat.advance(now)
+	note_attention(cat)
+	if annoyed:
+		return change_intimacy(cat, -3.0, now)
+	if sleeping:
+		return change_intimacy(cat, -1.0, now)
+	cat.happiness = minf(100.0, cat.happiness + 5.0)
+	_first(cat, "first_pet", "%s를 처음으로 쓰다듬었어요." % cat.cat_name, now)
+	return change_intimacy(cat, 2.0, now)
+
+
+## Player answered the cat's slow blink ("cat kiss"): the most valuable bond action.
+func answer_blink(cat: CatData, now: int) -> float:
+	_first(cat, "first_blink", "%s와 처음으로 눈인사를 나눴어요." % cat.cat_name, now)
+	note_attention(cat)
+	return change_intimacy(cat, 4.0, now)
+
+
+## Player left an annoyed cat alone until it calmed down.
+func respected_space(cat: CatData, now: int) -> float:
+	return change_intimacy(cat, 1.0, now)
+
+
+func comfort_jealous(cat: CatData, now: int) -> float:
+	_first(cat, "first_jealous", "%s(이)가 질투를 했어요. 달래 주니 금세 기분이 풀렸어요." % cat.cat_name, now)
+	note_attention(cat)
+	return change_intimacy(cat, 2.0, now)
+
+
+# ---------- discovery ----------
+
+func discover_habit(cat: CatData, habit: String, now: int) -> bool:
+	if not habit in cat.habits or habit in cat.discovered_habits:
+		return false
+	cat.discovered_habits.append(habit)
+	var h: Dictionary = Traits.HABITS[habit]
+	log_event(cat, "새로운 습관 발견: %s — %s" % [h["label"], h["hint"]], now)
+	return true
+
+
+func record_behavior(behavior_id: String) -> bool:
+	if behavior_id in discovered_behaviors:
+		return false
+	discovered_behaviors.append(behavior_id)
+	return true
+
+
+# ---------- persistence ----------
+
+func to_dict() -> Dictionary:
+	var cat_dicts: Array = []
+	for c in cats:
+		cat_dicts.append(c.to_dict())
+	return {
+		"version": SAVE_VERSION, "cats": cat_dicts, "diary": diary,
+		"discovered_behaviors": discovered_behaviors, "daily_gain": daily_gain,
+	}
+
+
+static func from_dict(d: Dictionary) -> Household:
+	var h := Household.new()
+	for cd in d.get("cats", []):
+		if cd is Dictionary:
+			h.cats.append(CatData.from_dict(cd))
+	h.diary = Array(d.get("diary", []))
+	h.discovered_behaviors = Array(d.get("discovered_behaviors", []))
+	var dg = d.get("daily_gain", {})
+	h.daily_gain = dg if dg is Dictionary else {}
+	return h
+
+
+func save(path := SAVE_PATH) -> void:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(to_dict()))
+
+
+static func load_from(path := SAVE_PATH) -> Household:
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		var parsed = JSON.parse_string(f.get_as_text())
+		if parsed is Dictionary:
+			return from_dict(parsed)
+	return Household.new()

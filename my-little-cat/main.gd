@@ -1,21 +1,36 @@
 extends Node3D
-## Prototype: 3D room + placeholder cat + feed/play loop.
-## The placeholder cat (primitive shapes) will be replaced by the purchased rigged cat asset.
+## Prototype: 3D room, up to 3 cats with personalities/habits, intimacy built by reading body language.
+## Cats are primitive placeholders until the purchased rigged asset is imported.
 
-const DEV_TOOLS := true  # shows the "+1시간" time-skip button for testing decay
+const DEV_TOOLS := true  # "+1시간" and "입양(테스트)" buttons for testing
 
-var state := CatState.new()
-var time_offset := 0  # dev time skip, seconds
+const BEHAVIOR_NAMES := {
+	"purr_pet": "쓰다듬으면 골골송",
+	"tail_lash": "꼬리 세차게 흔들기 (싫다는 신호)",
+	"slow_blink": "천천히 눈 깜빡이기 (고양이 눈인사)",
+	"sleep": "낮잠",
+	"groom": "그루밍",
+	"zoomies": "우다다",
+}
+const NAME_POOL := ["나비", "까망", "구름", "치즈", "보리", "콩이", "모카", "두부"]
 
-var cat: Node3D
-var head: Node3D
-var tail: Node3D
-var action := "idle"
-var action_t := 0.0
+var household: Household
+var time_offset := 0
+var actors := {}          # cat_id -> CatActor
+var selected_id := ""
+var jealous_pending := {}  # cat_id -> true while waiting to be comforted
+var rng := RandomNumberGenerator.new()
 
+var title_label: Label
+var trait_label: Label
 var hunger_bar: ProgressBar
 var happy_bar: ProgressBar
-var status_label: Label
+var bond_bar: ProgressBar
+var signal_label: Label
+var toast_label: Label
+var toast_left := 0.0
+var blink_button: Button
+var tabs: HBoxContainer
 
 
 func now() -> int:
@@ -24,23 +39,38 @@ func now() -> int:
 
 func _ready() -> void:
 	Engine.max_fps = 30  # keeps heat and battery low; enough for a calm pet scene
-	state.load_or_init(now())
+	get_viewport().physics_object_picking = true
+	rng.randomize()
+	household = Household.load_from()
+	if household.cats.is_empty():
+		household.adopt("나비", "cheese", ["affectionate"], ["jealous", "window_spot"], now())
+	household.advance_all(now())
 	_build_room()
-	_build_cat()
 	_build_ui()
-	_refresh_ui()
+	for c in household.cats:
+		_spawn(c)
+	_select(household.cats[0].id)
 
 
 func _notification(what: int) -> void:
+	if household == null:
+		return
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
-		state.advance(now())
-		state.save()
+		household.advance_all(now())
+		household.save()
 	elif what == NOTIFICATION_APPLICATION_RESUMED:
-		state.advance(now())
-		_refresh_ui()
+		household.advance_all(now())
 
 
-# ---------- scene ----------
+func _sel() -> CatData:
+	return household.find(selected_id)
+
+
+func _actor() -> CatActor:
+	return actors.get(selected_id)
+
+
+# ---------- room ----------
 
 func _mat(c: Color, rough := 0.8) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -49,12 +79,12 @@ func _mat(c: Color, rough := 0.8) -> StandardMaterial3D:
 	return m
 
 
-func _mesh(mesh: Mesh, mat: Material, pos: Vector3, parent: Node3D = self) -> MeshInstance3D:
+func _mesh(mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = mat
 	mi.position = pos
-	parent.add_child(mi)
+	add_child(mi)
 	return mi
 
 
@@ -80,135 +110,80 @@ func _build_room() -> void:
 	var floor_mesh := PlaneMesh.new()
 	floor_mesh.size = Vector2(6, 6)
 	_mesh(floor_mesh, _mat(Color("b88a5f")), Vector3.ZERO)
-
 	var back := BoxMesh.new()
 	back.size = Vector3(6, 3, 0.1)
 	_mesh(back, _mat(Color("ecdcc5")), Vector3(0, 1.5, -3))
 	var left := BoxMesh.new()
 	left.size = Vector3(0.1, 3, 6)
 	_mesh(left, _mat(Color("e4d2b8")), Vector3(-3, 1.5, 0))
+	var window := BoxMesh.new()
+	window.size = Vector3(0.05, 0.9, 1.2)
+	var win_mat := _mat(Color("cfe8f5"), 0.1)
+	win_mat.emission_enabled = true
+	win_mat.emission = Color("fff1d6")
+	win_mat.emission_energy_multiplier = 0.6
+	_mesh(window, win_mat, Vector3(-2.94, 1.4, -0.6))
 
 	var rug := CylinderMesh.new()
 	rug.top_radius = 1.2
 	rug.bottom_radius = 1.2
 	rug.height = 0.02
-	var rug_mi := _mesh(rug, _mat(Color("e9b8aa"), 1.0), Vector3(0, 0.01, 0))
-	rug_mi.scale = Vector3(1, 1, 0.7)
-
+	_mesh(rug, _mat(Color("e9b8aa"), 1.0), Vector3(0, 0.01, 0)).scale = Vector3(1, 1, 0.7)
 	var bowl := CylinderMesh.new()
 	bowl.top_radius = 0.16
 	bowl.bottom_radius = 0.12
 	bowl.height = 0.08
-	_mesh(bowl, _mat(Color("7fb0d9"), 0.3), Vector3(0.7, 0.04, 0.3))
+	_mesh(bowl, _mat(Color("7fb0d9"), 0.3), CatActor.BOWL_POS + Vector3(0, 0.04, 0))
 
 	var cam := Camera3D.new()
-	cam.fov = 50
-	cam.position = Vector3(0.9, 1.6, 2.6)
+	cam.fov = 55
+	cam.position = Vector3(0.6, 2.1, 3.6)
 	add_child(cam)
-	cam.look_at(Vector3(0, 0.35, 0))
+	cam.look_at(Vector3(-0.1, 0.2, -0.2))
 
 
-func _build_cat() -> void:
-	var fur := _mat(Color("f2a65a"))
-	var cream := _mat(Color("fbe3c4"))
-	var dark := _mat(Color("2b2320"), 0.2)
-	cat = Node3D.new()
-	add_child(cat)
-
-	var body := SphereMesh.new()
-	body.radius = 0.2
-	body.height = 0.36
-	var body_mi := _mesh(body, fur, Vector3(0, 0.2, 0), cat)
-	body_mi.scale = Vector3(0.9, 1.0, 1.2)
-
-	for side in [-1, 1]:
-		var leg := CapsuleMesh.new()
-		leg.radius = 0.04
-		leg.height = 0.18
-		_mesh(leg, cream, Vector3(0.07 * side, 0.08, 0.13), cat)
-
-	head = Node3D.new()
-	head.position = Vector3(0, 0.45, 0.12)
-	cat.add_child(head)
-	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.15
-	head_mesh.height = 0.27
-	_mesh(head_mesh, fur, Vector3.ZERO, head)
-	var muzzle := SphereMesh.new()
-	muzzle.radius = 0.07
-	muzzle.height = 0.1
-	_mesh(muzzle, cream, Vector3(0, -0.05, 0.11), head)
-	for side in [-1, 1]:
-		var ear := PrismMesh.new()
-		ear.size = Vector3(0.1, 0.11, 0.04)
-		_mesh(ear, fur, Vector3(0.08 * side, 0.15, 0), head)
-		var eye := SphereMesh.new()
-		eye.radius = 0.025
-		eye.height = 0.05
-		_mesh(eye, dark, Vector3(0.055 * side, 0.02, 0.125), head)
-
-	tail = Node3D.new()
-	tail.position = Vector3(0, 0.12, -0.2)
-	cat.add_child(tail)
-	var tail_mesh := CapsuleMesh.new()
-	tail_mesh.radius = 0.035
-	tail_mesh.height = 0.4
-	var tail_mi := _mesh(tail_mesh, fur, Vector3(0, 0.18, -0.05), tail)
-	tail_mi.rotation_degrees = Vector3(-25, 0, 0)
-
-
-func _process(delta: float) -> void:
-	var t := Time.get_ticks_msec() / 1000.0
-	var mood := state.mood()
-	# breathing
-	cat.scale = Vector3.ONE * (1.0 + 0.015 * sin(t * 2.2))
-	tail.rotation_degrees.z = sin(t * (3.5 if mood == "content" else 1.2)) * 20.0
-
-	if action != "idle":
-		action_t += delta
-		match action:
-			"eat":
-				cat.position = cat.position.lerp(Vector3(0.45, 0, 0.25), delta * 3.0)
-				head.rotation_degrees.x = 30.0 + sin(action_t * 10.0) * 6.0
-			"play":
-				cat.position.y = absf(sin(action_t * 6.0)) * 0.25
-				cat.rotation_degrees.y += delta * 240.0
-		if action_t > 2.5:
-			action = "idle"
-			cat.position = Vector3.ZERO
-			cat.rotation_degrees = Vector3.ZERO
-	else:
-		# hungry/bored cats droop their head; content cats look up at the owner
-		var target_pitch := 22.0 if mood != "content" else -8.0
-		head.rotation_degrees.x = lerpf(head.rotation_degrees.x, target_pitch, delta * 2.0)
+func _spawn(c: CatData) -> void:
+	var a := CatActor.new()
+	add_child(a)
+	a.setup(c, household)
+	a.tapped.connect(_select)
+	a.habit_shown.connect(_on_habit_shown)
+	a.behavior_seen.connect(_on_behavior_seen)
+	a.calmed_down.connect(_on_calmed_down)
+	actors[c.id] = a
+	_rebuild_tabs()
 
 
 # ---------- UI ----------
 
-func _bar(label_text: String, parent: Control) -> ProgressBar:
+func _bar(label_text: String, parent: Control, color: Color) -> ProgressBar:
 	var row := HBoxContainer.new()
 	parent.add_child(row)
 	var l := Label.new()
 	l.text = label_text
 	l.custom_minimum_size = Vector2(110, 0)
-	l.add_theme_font_size_override("font_size", 26)
+	l.add_theme_font_size_override("font_size", 24)
 	row.add_child(l)
 	var b := ProgressBar.new()
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.custom_minimum_size = Vector2(0, 30)
+	b.custom_minimum_size = Vector2(0, 26)
 	b.show_percentage = false
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = color
+	b.add_theme_stylebox_override("fill", fill)
 	row.add_child(b)
 	return b
 
 
-func _button(text: String, parent: Control, cb: Callable) -> void:
+func _button(text: String, parent: Control, cb: Callable, height := 88) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(0, 96)
+	b.custom_minimum_size = Vector2(0, height)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.add_theme_font_size_override("font_size", 32)
+	b.add_theme_font_size_override("font_size", 28)
 	b.pressed.connect(cb)
 	parent.add_child(b)
+	return b
 
 
 func _build_ui() -> void:
@@ -216,69 +191,217 @@ func _build_ui() -> void:
 	add_child(layer)
 	var root := MarginContainer.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	for side in ["left", "right"]:
-		root.add_theme_constant_override("margin_" + side, 32)
-	root.add_theme_constant_override("margin_top", 72)
-	root.add_theme_constant_override("margin_bottom", 56)
+	root.add_theme_constant_override("margin_left", 28)
+	root.add_theme_constant_override("margin_right", 28)
+	root.add_theme_constant_override("margin_top", 64)
+	root.add_theme_constant_override("margin_bottom", 48)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
 
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 14)
+	col.add_theme_constant_override("separation", 10)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(col)
 
-	var title := Label.new()
-	title.text = state.cat_name
-	title.add_theme_font_size_override("font_size", 44)
-	col.add_child(title)
-	hunger_bar = _bar("배부름", col)
-	happy_bar = _bar("행복", col)
-	status_label = Label.new()
-	status_label.add_theme_font_size_override("font_size", 28)
-	col.add_child(status_label)
+	tabs = HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 10)
+	col.add_child(tabs)
+
+	title_label = Label.new()
+	title_label.add_theme_font_size_override("font_size", 40)
+	col.add_child(title_label)
+	trait_label = Label.new()
+	trait_label.add_theme_font_size_override("font_size", 22)
+	trait_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(trait_label)
+	hunger_bar = _bar("배부름", col, Color("f2a65a"))
+	happy_bar = _bar("행복", col, Color("7fc8a9"))
+	bond_bar = _bar("친밀도", col, Color("f08ca0"))
+	signal_label = Label.new()
+	signal_label.add_theme_font_size_override("font_size", 24)
+	signal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(signal_label)
 
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(spacer)
 
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 16)
-	col.add_child(buttons)
-	_button("밥 주기", buttons, _on_feed)
-	_button("놀아주기", buttons, _on_play)
+	toast_label = Label.new()
+	toast_label.add_theme_font_size_override("font_size", 24)
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var toast_bg := StyleBoxFlat.new()
+	toast_bg.bg_color = Color(0, 0, 0, 0.55)
+	toast_bg.set_corner_radius_all(14)
+	toast_bg.content_margin_left = 16
+	toast_bg.content_margin_right = 16
+	toast_bg.content_margin_top = 10
+	toast_bg.content_margin_bottom = 10
+	toast_label.add_theme_stylebox_override("normal", toast_bg)
+	toast_label.visible = false
+	col.add_child(toast_label)
+
+	blink_button = _button("눈인사로 답하기 ♥", col, _on_blink, 80)
+	blink_button.visible = false
+
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 12)
+	col.add_child(row1)
+	_button("쓰다듬기", row1, _on_pet)
+	_button("밥 주기", row1, _on_feed)
+	_button("놀아주기", row1, _on_play)
+
 	if DEV_TOOLS:
-		_button("+1시간", buttons, _on_skip_hour)
+		var row2 := HBoxContainer.new()
+		row2.add_theme_constant_override("separation", 12)
+		col.add_child(row2)
+		_button("+1시간 (테스트)", row2, _on_skip_hour, 64)
+		_button("입양 (테스트)", row2, _on_adopt_test, 64)
 
 
-func _refresh_ui() -> void:
-	hunger_bar.value = state.hunger
-	happy_bar.value = state.happiness
-	match state.mood():
-		"hungry":
-			status_label.text = "배가 고파요. 밥그릇을 쳐다보고 있어요"
-		"bored":
-			status_label.text = "심심해요. 놀아줄까요?"
-		_:
-			status_label.text = "기분 좋게 쉬고 있어요"
+func _rebuild_tabs() -> void:
+	for ch in tabs.get_children():
+		ch.queue_free()
+	for c in household.cats:
+		var id: String = c.id
+		var b := _button(c.cat_name, tabs, func(): _select(id), 60)
+		b.toggle_mode = true
+		b.button_pressed = id == selected_id
+
+
+func _select(id: String) -> void:
+	selected_id = id
+	for k in actors:
+		actors[k].set_selected(k == id)
+	_rebuild_tabs()
+
+
+func _toast(text: String) -> void:
+	toast_label.text = text
+	toast_label.visible = true
+	toast_left = 3.5
+
+
+func _process(delta: float) -> void:
+	var c := _sel()
+	var a := _actor()
+	if c == null or a == null:
+		return
+	title_label.text = c.cat_name
+	var habits_text := "습관: 아직 발견 못 함"
+	if not c.discovered_habits.is_empty():
+		var names: Array = []
+		for h in c.discovered_habits:
+			names.append(Traits.HABITS[h]["label"])
+		habits_text = "습관: " + ", ".join(names)
+	trait_label.text = "%s  |  %s  (%d/%d 발견)" % [c.personality_labels(), habits_text, c.discovered_habits.size(), c.habits.size()]
+	hunger_bar.value = c.hunger
+	happy_bar.value = c.happiness
+	bond_bar.value = c.intimacy
+	signal_label.text = a.signal_text()
+	blink_button.visible = a.is_blinking()
+	if toast_left > 0.0:
+		toast_left -= delta
+		if toast_left <= 0.0:
+			toast_label.visible = false
+
+
+# ---------- actions ----------
+
+func _after_action(c: CatData, delta_bond: float, msg: String) -> void:
+	if jealous_pending.has(c.id):
+		jealous_pending.erase(c.id)
+		household.comfort_jealous(c, now())
+		msg = "%s의 질투가 풀렸어요" % c.cat_name
+	for j in household.jealous_cats():
+		if not jealous_pending.has(j.id):
+			jealous_pending[j.id] = true
+			actors[j.id].go_jealous(actors[c.id].position)
+	if household.attention_streak >= Household.JEALOUSY_STREAK:
+		household.attention_streak = 0
+	if msg != "":
+		_toast(msg)
+	elif delta_bond < 0.0:
+		_toast("%s(이)가 싫어했어요 (친밀도 %.0f)" % [c.cat_name, delta_bond])
+	household.save()
+
+
+func _on_pet() -> void:
+	var c := _sel()
+	var a := _actor()
+	var d := household.pet(c, now(), a.is_annoyed(), a.is_sleeping())
+	var msg := ""
+	if a.is_sleeping():
+		msg = "자는 %s를 깨웠어요" % c.cat_name
+	a.on_pet()
+	_after_action(c, d, msg)
 
 
 func _on_feed() -> void:
-	state.feed(now())
-	state.save()
-	action = "eat"
-	action_t = 0.0
-	_refresh_ui()
+	var c := _sel()
+	var d := household.feed(c, now())
+	_actor().on_feed()
+	_after_action(c, d, "")
 
 
 func _on_play() -> void:
-	state.play(now())
-	state.save()
-	action = "play"
-	action_t = 0.0
-	_refresh_ui()
+	var c := _sel()
+	var d := household.play(c, now())
+	_actor().on_play()
+	_after_action(c, d, "")
+
+
+func _on_blink() -> void:
+	var c := _sel()
+	var d := household.answer_blink(c, now())
+	_actor().on_blink_answered()
+	_after_action(c, d, "%s와 눈인사를 나눴어요 ♥" % c.cat_name)
+
+
+func _on_calmed_down(cat_id: String) -> void:
+	var c := household.find(cat_id)
+	if c:
+		household.respected_space(c, now())
+		if cat_id == selected_id:
+			_toast("기다려 줘서 고마워요. %s의 기분이 풀렸어요" % c.cat_name)
+		household.save()
+
+
+func _on_habit_shown(cat_id: String, habit: String) -> void:
+	var c := household.find(cat_id)
+	if c and household.discover_habit(c, habit, now()):
+		_toast("%s의 새로운 습관 발견: %s" % [c.cat_name, Traits.HABITS[habit]["label"]])
+		household.save()
+
+
+func _on_behavior_seen(behavior_id: String) -> void:
+	if household.record_behavior(behavior_id):
+		_toast("행동 도감에 추가: %s" % BEHAVIOR_NAMES.get(behavior_id, behavior_id))
+		household.save()
 
 
 func _on_skip_hour() -> void:
 	time_offset += 3600
-	state.advance(now())
-	state.save()
-	_refresh_ui()
+	household.advance_all(now())
+	household.save()
+
+
+func _on_adopt_test() -> void:
+	if household.cats.size() >= Household.MAX_CATS:
+		_toast("지금은 최대 %d마리까지 키울 수 있어요" % Household.MAX_CATS)
+		return
+	var used: Array = []
+	for c in household.cats:
+		used.append(c.cat_name)
+	var new_name := ""
+	for n in NAME_POOL:
+		if not n in used:
+			new_name = n
+			break
+	var p := Household.random_profile(rng)
+	var c := household.adopt(new_name, p["coat"], p["personalities"], p["habits"], now())
+	_spawn(c)
+	_select(c.id)
+	_toast("%s(이)가 우리 집에 왔어요! 성격: %s" % [new_name, c.personality_labels()])
+	household.save()
