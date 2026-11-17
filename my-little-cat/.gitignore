@@ -3,3 +3,8 @@ android/
 /build/
 *.apk
 *.aab
+
+# Purchased third-party assets: license forbids redistribution, never commit them
+assets/thirdparty/
+*.blend
+*.glb
