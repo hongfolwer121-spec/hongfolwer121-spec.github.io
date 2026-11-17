@@ -13,6 +13,8 @@ var cats: Array[CatData] = []
 var diary: Array = []                 # {t, cat_id, text}
 var discovered_behaviors: Array = []  # behavior ids seen at least once (behavior dex)
 var daily_gain := {}                  # {"<day>": {"<cat_id>": gained}}
+var diary_seen := 0                  # diary entries already viewed in the phone (unread badge)
+var adopted_candidates: Array = []   # adoption-center candidate ids already taken
 var attention_cat := ""               # id of the cat that got the latest attention
 var attention_streak := 0
 
@@ -34,6 +36,7 @@ func find(id: String) -> CatData:
 func log_event(cat: CatData, text: String, now: int) -> void:
 	diary.append({"t": now, "cat_id": cat.id if cat else "", "text": text})
 	if diary.size() > DIARY_LIMIT:
+		diary_seen = maxi(0, diary_seen - (diary.size() - DIARY_LIMIT))
 		diary = diary.slice(diary.size() - DIARY_LIMIT)
 
 
@@ -84,6 +87,42 @@ static func random_profile(rng: RandomNumberGenerator) -> Dictionary:
 			habits.append(h)
 	var coats := Traits.COATS.keys()
 	return {"coat": coats[rng.randi() % coats.size()], "personalities": personalities, "habits": habits}
+
+
+## Adoption center: 3 cats per day, identical all day long.
+func adoption_candidates(now: int) -> Array:
+	var dk := day_key(now)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("adopt-" + dk)
+	var used: Array = []   # only among today's candidates, so the list never shifts after an adoption
+	var out: Array = []
+	for i in 3:
+		var p := random_profile(rng)
+		var cat_name := ""
+		for _try in 20:
+			var n: String = Catalog.NAME_POOL[rng.randi() % Catalog.NAME_POOL.size()]
+			if not n in used:
+				cat_name = n
+				break
+		used.append(cat_name)
+		p["name"] = cat_name
+		p["candidate_id"] = "%s-%d" % [dk, i]
+		p["taken"] = p["candidate_id"] in adopted_candidates
+		out.append(p)
+	return out
+
+
+func adopt_candidate(candidate: Dictionary, now: int) -> CatData:
+	if candidate.get("taken", false):
+		return null
+	var cat_name: String = candidate["name"]
+	for other in cats:
+		if other.cat_name == cat_name:
+			cat_name += " 2세"
+	var c := adopt(cat_name, candidate["coat"], candidate["personalities"], candidate["habits"], now)
+	if c:
+		adopted_candidates.append(candidate["candidate_id"])
+	return c
 
 
 # ---------- intimacy ----------
@@ -205,6 +244,7 @@ func to_dict() -> Dictionary:
 	return {
 		"version": SAVE_VERSION, "cats": cat_dicts, "diary": diary,
 		"discovered_behaviors": discovered_behaviors, "daily_gain": daily_gain,
+		"adopted_candidates": adopted_candidates, "diary_seen": diary_seen,
 	}
 
 
@@ -215,6 +255,8 @@ static func from_dict(d: Dictionary) -> Household:
 			h.cats.append(CatData.from_dict(cd))
 	h.diary = Array(d.get("diary", []))
 	h.discovered_behaviors = Array(d.get("discovered_behaviors", []))
+	h.adopted_candidates = Array(d.get("adopted_candidates", []))
+	h.diary_seen = int(d.get("diary_seen", 0))
 	var dg = d.get("daily_gain", {})
 	h.daily_gain = dg if dg is Dictionary else {}
 	return h

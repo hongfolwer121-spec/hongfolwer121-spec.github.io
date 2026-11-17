@@ -8,9 +8,19 @@ func _initialize() -> void:
 	var main = load("res://main.tscn").instantiate()
 	root.add_child(main)
 	await process_frame
-	main._on_adopt_test()
-	main._on_adopt_test()
-	main._on_adopt_test()  # 4th: must be refused
+	main._open_phone()
+	var cands: Array = main.household.adoption_candidates(main.now())
+	main.phone._adopt(cands[0])
+	main.phone._adopt(cands[0])  # same candidate twice: must be refused
+	main.phone._adopt(main.household.adoption_candidates(main.now())[1])
+	main.phone._adopt(main.household.adoption_candidates(main.now())[2])  # 4th cat: must be refused
+	for app in ["market", "adopt", "camera", "notes", "dex", "help"]:
+		main.phone._open_app(app)
+		await process_frame
+	main.phone._set_dex_tab("habit")
+	main.phone._set_dex_tab("title")
+	main.phone._set_notes_filter(main.household.cats[0].id)
+	main.phone.close()
 	for i in 3:
 		main._select(main.household.cats[0].id)
 		main._on_pet()
@@ -21,7 +31,7 @@ func _initialize() -> void:
 	main._on_pet()
 	for i in 600:
 		await process_frame
-	var ok: bool = main.household.cats.size() == 3 and main.actors.size() == 3 and not main.household.diary.is_empty()
+	var ok: bool = main.household.cats.size() == 3 and main.actors.size() == 3 and not main.household.diary.is_empty() and main.phone.unread_count() >= 0
 	print("cats=%d actors=%d diary=%d behaviors=%s" % [main.household.cats.size(), main.actors.size(), main.household.diary.size(), main.household.discovered_behaviors])
 	print("SMOKE ", "PASS" if ok else "FAIL")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(Household.SAVE_PATH))

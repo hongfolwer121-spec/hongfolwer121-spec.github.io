@@ -2,17 +2,8 @@ extends Node3D
 ## Prototype: 3D room, up to 3 cats with personalities/habits, intimacy built by reading body language.
 ## Cats are primitive placeholders until the purchased rigged asset is imported.
 
-const DEV_TOOLS := true  # "+1시간" and "입양(테스트)" buttons for testing
+const DEV_TOOLS := true  # "+1시간" button for testing decay
 
-const BEHAVIOR_NAMES := {
-	"purr_pet": "쓰다듬으면 골골송",
-	"tail_lash": "꼬리 세차게 흔들기 (싫다는 신호)",
-	"slow_blink": "천천히 눈 깜빡이기 (고양이 눈인사)",
-	"sleep": "낮잠",
-	"groom": "그루밍",
-	"zoomies": "우다다",
-}
-const NAME_POOL := ["나비", "까망", "구름", "치즈", "보리", "콩이", "모카", "두부"]
 
 var household: Household
 var time_offset := 0
@@ -31,6 +22,8 @@ var toast_label: Label
 var toast_left := 0.0
 var blink_button: Button
 var tabs: HBoxContainer
+var phone: PhoneUI
+var phone_button: Button
 
 
 func now() -> int:
@@ -252,12 +245,17 @@ func _build_ui() -> void:
 	_button("밥 주기", row1, _on_feed)
 	_button("놀아주기", row1, _on_play)
 
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 12)
+	col.add_child(row2)
+	phone_button = _button("스마트폰 열기", row2, _open_phone, 72)
 	if DEV_TOOLS:
-		var row2 := HBoxContainer.new()
-		row2.add_theme_constant_override("separation", 12)
-		col.add_child(row2)
-		_button("+1시간 (테스트)", row2, _on_skip_hour, 64)
-		_button("입양 (테스트)", row2, _on_adopt_test, 64)
+		_button("+1시간 (테스트)", row2, _on_skip_hour, 72)
+
+	phone = PhoneUI.new()
+	layer.add_child(phone)
+	phone.setup(household, now)
+	phone.adopted.connect(_on_adopted)
 
 
 func _rebuild_tabs() -> void:
@@ -301,6 +299,8 @@ func _process(delta: float) -> void:
 	bond_bar.value = c.intimacy
 	signal_label.text = a.signal_text()
 	blink_button.visible = a.is_blinking()
+	var unread := phone.unread_count()
+	phone_button.text = "스마트폰 (새 기록 %d)" % unread if unread > 0 else "스마트폰 열기"
 	if toast_left > 0.0:
 		toast_left -= delta
 		if toast_left <= 0.0:
@@ -377,7 +377,7 @@ func _on_habit_shown(cat_id: String, habit: String) -> void:
 
 func _on_behavior_seen(behavior_id: String) -> void:
 	if household.record_behavior(behavior_id):
-		_toast("행동 도감에 추가: %s" % BEHAVIOR_NAMES.get(behavior_id, behavior_id))
+		_toast("행동 도감에 추가: %s" % Catalog.behavior_name(behavior_id))
 		household.save()
 
 
@@ -387,21 +387,12 @@ func _on_skip_hour() -> void:
 	household.save()
 
 
-func _on_adopt_test() -> void:
-	if household.cats.size() >= Household.MAX_CATS:
-		_toast("지금은 최대 %d마리까지 키울 수 있어요" % Household.MAX_CATS)
-		return
-	var used: Array = []
-	for c in household.cats:
-		used.append(c.cat_name)
-	var new_name := ""
-	for n in NAME_POOL:
-		if not n in used:
-			new_name = n
-			break
-	var p := Household.random_profile(rng)
-	var c := household.adopt(new_name, p["coat"], p["personalities"], p["habits"], now())
+func _open_phone() -> void:
+	household.advance_all(now())
+	phone.open()
+
+
+func _on_adopted(c: CatData) -> void:
 	_spawn(c)
 	_select(c.id)
-	_toast("%s(이)가 우리 집에 왔어요! 성격: %s" % [new_name, c.personality_labels()])
-	household.save()
+	_toast("%s(이)가 우리 집에 왔어요! 성격: %s" % [c.cat_name, c.personality_labels()])
